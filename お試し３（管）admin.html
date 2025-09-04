@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>じゃがバター販売 管理システム</title>
+    <style>
+        body { font-family: 'Helvetica Neue', 'Arial', sans-serif; margin: 0; padding: 20px; background-color: #f4f4f9; color: #333; line-height: 1.6; }
+        .container { max-width: 800px; margin: auto; background: #fff; padding: 30px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        h1 { color: #4a4a4a; text-align: center; margin-bottom: 20px; }
+        .admin-section { margin-top: 40px; border-top: 2px solid #ddd; padding-top: 20px; }
+        .admin-section h2 { text-align: center; color: #666; }
+        .summary-section { text-align: center; margin-bottom: 20px; }
+        .summary-section p { font-size: 20px; font-weight: bold; }
+        .reservation-list { list-style: none; padding: 0; }
+        .reservation-item { background: #f9f9f9; padding: 15px; border-radius: 5px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+        .reservation-details { flex-grow: 1; }
+        .reservation-details p { margin: 0; }
+        .action-buttons { display: flex; gap: 5px; }
+        .action-buttons button { width: auto; padding: 8px 12px; border: none; border-radius: 5px; color: white; font-size: 14px; cursor: pointer; }
+        .complete-btn { background-color: #0275d8; }
+        .complete-btn:hover { background-color: #025aa5; }
+        .cancel-admin-btn { background-color: #f0ad4e; }
+        .cancel-admin-btn:hover { background-color: #ec971f; }
+        .adjustment-section { margin-top: 20px; border-top: 1px solid #eee; padding-top: 15px; }
+        .adjustment-section label { display: inline-block; margin-right: 10px; }
+        .adjustment-section input[type="number"] { width: 80px; }
+        .adjustment-section button { width: auto; padding: 8px 12px; font-size: 14px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>じゃがバター販売 管理システム</h1>
+    
+    <div class="summary-section">
+        <p>受け取り完了人数：<span id="completed-count">0</span>人</p>
+    </div>
+
+    <div class="adjustment-section">
+        <label for="base-time-adjustment">基本待ち時間調整 (分):</label>
+        <input type="number" id="base-time-adjustment" value="0">
+        <button onclick="updateWaitTimeAdjustment()">適用</button>
+    </div>
+    
+    <div class="reservation-list" id="admin-list">
+        </div>
+</div>
+
+<script>
+    const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzMqs20e_UydMf_qU1KrU3880FphKlG8_Fi768TOWzzGQ1qEOIEc4c6AJb4IzHCzlrh/exec';
+    const PRODUCTION_RATE_PER_15_MINS = 19;
+    const TOTAL_PRODUCTION_RATE_PER_MIN = PRODUCTION_RATE_PER_15_MINS / 15;
+    
+    let baseWaitTimeAdjustment = 0; 
+
+    window.onload = function() {
+        updateAdminList();
+        setInterval(updateAdminList, 10000); 
+        updateCompletedCount();
+        setInterval(updateCompletedCount, 10000);
+    };
+
+    async function updateAdminList() {
+        try {
+            const reservationResponse = await fetch(SCRIPT_URL, {
+                method: 'POST',
+                body: new URLSearchParams({ action: 'getReservations' }),
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            });
+            const reservationData = await reservationResponse.json();
+
+            if (reservationData.success) {
+                const adminList = document.getElementById('admin-list');
+                adminList.innerHTML = '';
+                const reservations = reservationData.reservations;
+                
+                baseWaitTimeAdjustment = parseInt(localStorage.getItem('baseWaitTimeAdjustment')) || 0;
+                document.getElementById('base-time-adjustment').value = baseWaitTimeAdjustment;
+
+                reservations.forEach((reservation, index) => {
+                    const totalPeopleAhead = reservations.slice(0, index).reduce((sum, res) => sum + res.people, 0);
+                    const waitTime = Math.ceil(totalPeopleAhead / TOTAL_PRODUCTION_RATE_PER_MIN) + baseWaitTimeAdjustment;
+
+                    const listItem = document.createElement('div');
+                    listItem.className = 'reservation-item';
+                    listItem.innerHTML = `
+                        <div class="reservation-details">
+                            <p><strong>受付番号:</strong> ${reservation.reservationNumber} (${reservation.people}名)</p>
+                            <p><strong>予約時刻:</strong> ${new Date(reservation.reservationTime).toLocaleTimeString('ja-JP')}</p>
+                            <p><strong>現在の状態:</strong> ${reservation.state}</p>
+                            <p><strong>待ち時間:</strong> ${waitTime}分</p>
+                        </div>
+                        <div class="action-buttons">
+                            <button class="complete-btn" onclick="updateAdminState(${reservation.reservationNumber}, '完了', ${reservation.people})">完了</button>
+                            <button class="cancel-admin-btn" onclick="updateAdminState(${reservation.reservationNumber}, 'キャンセル')">キャンセル</button>
+                        </div>
+                    `;
+                    adminList.appendChild(listItem);
+                });
+            }
+        } catch (error) {
+            console.error('管理者リスト更新エラー:', error);
+        }
+    }
+
+    function updateAdminState(reservationNumber, state, people) {
+        const formData = new FormData();
+        formData.append('action', 'updateState');
+        formData.append('reservationNumber', reservationNumber);
+        formData.append('state', state);
+
+        fetch(SCRIPT_URL, {
+            method: 'POST',
+            body: formData,
+        }).then(() => {
+            if (state === '完了') {
+                incrementCompletedCount(people);
+            }
+            setTimeout(updateAdminList, 1000);
+        }).catch(error => {
+            console.error('管理者更新エラー:', error);
+        });
+    }
+
+    function updateWaitTimeAdjustment() {
+        const adjustmentInput = document.getElementById('base-time-adjustment');
+        const newAdjustment = parseInt(adjustmentInput.value) || 0;
+        
+        localStorage.setItem('baseWaitTimeAdjustment', newAdjustment);
+
+        alert(`基本待ち時間を${newAdjustment}分に調整しました。`);
+        updateAdminList();
+    }
+    
+    function updateCompletedCount() {
+        fetch(SCRIPT_URL, {
+            method: 'POST',
+            body: new URLSearchParams({ action: 'getCompletedCount' }),
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                document.getElementById('completed-count').textContent = data.count;
+            }
+        });
+    }
+
+    function incrementCompletedCount(people) {
+        const formData = new FormData();
+        formData.append('action', 'incrementCompleted');
+        formData.append('people', people);
+
+        fetch(SCRIPT_URL, {
+            method: 'POST',
+            body: formData,
+        }).then(() => {
+            updateCompletedCount();
+        }).catch(error => {
+            console.error('受け取り人数更新エラー:', error);
+        });
+    }
+</script>
+
+</body>
+</html>
